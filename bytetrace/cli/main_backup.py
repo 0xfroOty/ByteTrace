@@ -1,7 +1,7 @@
 """
 ByteTrace CLI entry point.
 
-Defines the root ``cli`` Click group and registers all sub-commands.
+Defines the root `cli` Click group and registers all sub-commands.
 This is the target of the ``bytetrace`` console script in pyproject.toml.
 
 Architecture note
@@ -13,6 +13,8 @@ bottom of this file after the group is fully defined.
 """
 
 from __future__ import annotations
+
+import sys
 
 import click
 
@@ -87,6 +89,7 @@ def cli(ctx: click.Context) -> None:
         return
 
     no_color: bool = (ctx.obj or {}).get("no_color", False)
+
     banner = (
         f"\n  ByteTrace v{__version__}\n"
         "  A modern, educational binary analysis tool.\n"
@@ -94,7 +97,8 @@ def cli(ctx: click.Context) -> None:
 
     try:
         from rich.console import Console
-        Console(no_color=no_color).print(
+        console = Console(no_color=no_color)
+        console.print(
             f"\n  [bold cyan]ByteTrace[/bold cyan] [dim]v{__version__}[/dim]\n"
             "  [dim]A modern, educational binary analysis tool.[/dim]\n"
         )
@@ -105,17 +109,11 @@ def cli(ctx: click.Context) -> None:
 
 
 # ── Sub-command registration ──────────────────────────────────────
-# Deferred imports prevent circular references and keep startup fast.
+# Imports are deferred to after `cli` is defined to avoid circular refs.
 
-from bytetrace.cli.commands.version  import version   # noqa: E402
-from bytetrace.cli.commands.info     import info       # noqa: E402
-from bytetrace.cli.commands.sections import sections   # noqa: E402
-from bytetrace.cli.commands.symbols  import symbols    # noqa: E402
+from bytetrace.cli.commands.version import version  # noqa: E402
 
 cli.add_command(version)
-cli.add_command(info)
-cli.add_command(sections)
-cli.add_command(symbols)
 
 
 # ── Entry point ───────────────────────────────────────────────────
