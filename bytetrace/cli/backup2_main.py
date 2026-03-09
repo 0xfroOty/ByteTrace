@@ -3,6 +3,13 @@ ByteTrace CLI entry point.
 
 Defines the root ``cli`` Click group and registers all sub-commands.
 This is the target of the ``bytetrace`` console script in pyproject.toml.
+
+Architecture note
+─────────────────
+The root group is intentionally thin.  It owns only the global flags
+(--version, --no-color) and delegates all analysis logic to individual
+command modules under cli/commands/.  New commands are wired in at the
+bottom of this file after the group is fully defined.
 """
 
 from __future__ import annotations
@@ -12,20 +19,27 @@ import click
 from bytetrace import __version__
 
 
+# ── Context settings ──────────────────────────────────────────────
+
 CONTEXT_SETTINGS: dict = {
     "help_option_names": ["-h", "--help"],
     "max_content_width": 100,
 }
 
 
+# ── --no-color callback ───────────────────────────────────────────
+
 def _apply_no_color(
     ctx: click.Context,
     _param: click.Parameter,
     value: bool,
 ) -> None:
+    """Store the --no-color flag in ctx.obj before sub-commands run."""
     ctx.ensure_object(dict)
     ctx.obj["no_color"] = value
 
+
+# ── Root command group ────────────────────────────────────────────
 
 @click.group(
     context_settings=CONTEXT_SETTINGS,
@@ -73,7 +87,10 @@ def cli(ctx: click.Context) -> None:
         return
 
     no_color: bool = (ctx.obj or {}).get("no_color", False)
-    banner = f"\n  ByteTrace v{__version__}\n  A modern, educational binary analysis tool.\n"
+    banner = (
+        f"\n  ByteTrace v{__version__}\n"
+        "  A modern, educational binary analysis tool.\n"
+    )
 
     try:
         from rich.console import Console
@@ -88,19 +105,20 @@ def cli(ctx: click.Context) -> None:
 
 
 # ── Sub-command registration ──────────────────────────────────────
+# Deferred imports prevent circular references and keep startup fast.
 
 from bytetrace.cli.commands.version  import version   # noqa: E402
 from bytetrace.cli.commands.info     import info       # noqa: E402
 from bytetrace.cli.commands.sections import sections   # noqa: E402
 from bytetrace.cli.commands.symbols  import symbols    # noqa: E402
-from bytetrace.cli.commands.disasm   import disasm     # noqa: E402
 
 cli.add_command(version)
 cli.add_command(info)
 cli.add_command(sections)
 cli.add_command(symbols)
-cli.add_command(disasm)
 
+
+# ── Entry point ───────────────────────────────────────────────────
 
 def main() -> None:
     """Called by the ``bytetrace`` console script."""
