@@ -614,3 +614,187 @@ def _render_disasm_plain(
         )
     console.print(f"  {SEP}")
     console.print(f"  {len(instructions)} instruction(s)")
+
+
+# ═════════════════════════════════════════════════════════════════
+# cfg command
+# ═════════════════════════════════════════════════════════════════
+
+def render_cfg(
+    cfg: "Any",          # CFGraph — avoid circular import at module level
+    console: Any,
+    title: str = "Control Flow Graph",
+    binary: "Any | None" = None,
+) -> None:
+    """
+    Render a ``CFGraph`` for ``bytetrace cfg``.
+
+    Default output draws each basic block as a labelled ASCII box
+    with edge annotations.  Rich is used when available.
+    """
+    nc = console.no_color
+
+    # Build address → symbol name map for annotations
+    sym_lookup: dict[int, str] = {}
+    if binary is not None:
+        for sym in binary.symbols:
+            if sym.address and sym.address not in sym_lookup:
+                sym_lookup[sym.address] = sym.name
+
+    if _RICH_AVAILABLE:
+        _render_cfg_rich(cfg, console, nc, title, sym_lookup)
+    else:
+        _render_cfg_plain(cfg, console, nc, title, sym_lookup)
+
+
+# ── shared helpers ────────────────────────────────────────────────
+
+def _edge_glyph(kind: str, no_color: bool) -> str:
+    """Return a coloured unicode arrow for the given edge kind."""
+    if kind == "fall":
+        return _c("↓ fall", "dim", no_color)
+    if kind == "jump":
+        return _c("→ jump", "bold yellow", no_color)
+    if kind == "cjump":
+        return _c("⎇ cjump", "bold cyan", no_color)
+    return _c(f"? {kind}", "dim", no_color)
+
+
+def _mnem_style(mnem: str, no_color: bool) -> str:
+    _BRANCH  = {"call","jmp","je","jne","jz","jnz","jl","jle","jg","jge",
+                 "jb","jbe","ja","jae","js","jns","jp","jnp","jo","jno",
+                 "jrcxz","loop","loope","loopne"}
+    _STACK   = {"push","pop","leave","enter","ret"}
+    _TERM    = {"ret","hlt","ud2"}
+    if mnem in _TERM:   return _c(mnem, "bold red",     no_color)
+    if mnem in _BRANCH: return _c(mnem, "bold yellow",  no_color)
+    if mnem in _STACK:  return _c(mnem, "bold magenta", no_color)
+    if mnem == "nop":   return _c(mnem, "dim",          no_color)
+    return _c(mnem, "green", no_color)
+
+
+def _block_header(block: "Any", sym_lookup: dict, no_color: bool) -> str:
+    sym = sym_lookup.get(block.start_address, "")
+    addr_s = _c(f"0x{block.start_address:x}", "cyan", no_color)
+    tag    = f" <{sym}>" if sym else ""
+    ic     = _c(f"{block.instruction_count} insns", "dim", no_color)
+    return f"{addr_s}{tag}  [{ic}]"
+
+
+# ── Rich renderer ─────────────────────────────────────────────────
+
+def _render_cfg_rich(cfg: "Any", console: Any, nc: bool,
+                     title: str, sym_lookup: dict) -> None:
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text  import Text
+
+    # Stats header
+    stats = (
+        f"[bold cyan]Blocks[/bold cyan] {cfg.block_count}  "
+        f"[bold cyan]Edges[/bold cyan] {cfg.edge_count}  "
+        f"[bold cyan]Instructions[/bold cyan] {cfg.instruction_count}  "
+        f"[bold cyan]Complexity[/bold cyan] {cfg.cyclomatic_complexity}"
+    )
+    console.print()
+    console.print(f"  {title}")
+    console.print(f"  {stats}")
+    console.print()
+
+    # One panel per basic block
+    for block in cfg.blocks():
+        hdr = _block_header(block, sym_lookup, nc)
+
+        # Instructions table inside the block
+        tbl = Table.grid(padding=(0, 1))
+        tbl.add_column(style="cyan",  min_width=18, no_wrap=True)  # addr
+        tbl.add_column(style="dim",   min_width=12, no_wrap=True)  # bytes
+        tbl.add_column(min_width=10,  no_wrap=True)                 # mnemonic
+        tbl.add_column()                                             # operands
+
+        for insn in block.instructions:
+            op = _resolve_sym(insn.op_str, sym_lookup)
+            tbl.add_row(
+                f"0x{insn.address:x}",
+                _c(_bytes_str(insn.raw), "dim", nc),
+                _mnem_style(insn.mnemonic, nc),
+                op,
+            )
+
+        border = "dim"
+        if block.is_return:
+            border = "red"
+        elif block.start_address == cfg.entry:
+            border = "cyan"
+
+        console.print(Panel(tbl, title=f"[dim]{hdr}[/dim]",
+                            border_style=border, padding=(0, 1)))
+
+        # Edge annotations below the block
+        if block.successors:
+            for succ, kind in zip(block.successors, block.edge_kinds):
+                sym = sym_lookup.get(succ, "")
+                succ_s = _c(f"0x{succ:x}", "cyan", nc)
+                tag    = f" <{sym}>" if sym else ""
+                arrow  = _edge_glyph(kind, nc)
+                console.print(f"    {arrow}  {succ_s}{tag}")
+            console.print()
+
+    _render_cfg_stats_footer(cfg, console, nc)
+
+
+# ── Plain renderer ────────────────────────────────────────────────
+
+def _render_cfg_plain(cfg: "Any", console: Any, nc: bool,
+                      title: str, sym_lookup: dict) -> None:
+    SEP = "─" * 68
+    console.print(f"\n  {title}")
+    console.print(f"  {SEP}")
+    console.print(f"  Blocks {cfg.block_count}  "
+                  f"Edges {cfg.edge_count}  "
+                  f"Instructions {cfg.instruction_count}  "
+                  f"Complexity {cfg.cyclomatic_complexity}")
+    console.print(f"  {SEP}")
+
+    for block in cfg.blocks():
+        entry_mark = "*" if block.start_address == cfg.entry else " "
+        ret_mark   = "R" if block.is_return else " "
+        sym        = sym_lookup.get(block.start_address, "")
+        sym_s      = f" <{sym}>" if sym else ""
+        console.print(
+            f"\n  [{entry_mark}{ret_mark}] Block 0x{block.start_address:x}{sym_s}"
+            f"  ({block.instruction_count} insns)"
+        )
+        for insn in block.instructions:
+            op = _resolve_sym(insn.op_str, sym_lookup)
+            console.print(
+                f"       0x{insn.address:x}  "
+                f"{insn.mnemonic:<10} {op}"
+            )
+        for succ, kind in zip(block.successors, block.edge_kinds):
+            sym2 = sym_lookup.get(succ, "")
+            tag  = f" <{sym2}>" if sym2 else ""
+            console.print(f"       --> 0x{succ:x}{tag}  ({kind})")
+
+    console.print(f"\n  {SEP}")
+    _render_cfg_stats_footer(cfg, console, nc)
+
+
+def _render_cfg_stats_footer(cfg: "Any", console: Any, nc: bool) -> None:
+    cc = cfg.cyclomatic_complexity
+    if cc == 1:
+        cc_note = "straight-line (no branches)"
+    elif cc <= 3:
+        cc_note = "simple"
+    elif cc <= 7:
+        cc_note = "moderate"
+    elif cc <= 10:
+        cc_note = "complex"
+    else:
+        cc_note = "highly complex — consider refactoring"
+    console.print(
+        f"  {_c('Cyclomatic complexity:', 'dim', nc)} "
+        f"{_c(str(cc), 'bold yellow', nc)}  "
+        f"{_c(cc_note, 'dim', nc)}"
+    )
+    console.print()
