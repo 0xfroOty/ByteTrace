@@ -798,3 +798,196 @@ def _render_cfg_stats_footer(cfg: "Any", console: Any, nc: bool) -> None:
         f"{_c(cc_note, 'dim', nc)}"
     )
     console.print()
+
+
+# ═════════════════════════════════════════════════════════════════
+# strings command
+# ═════════════════════════════════════════════════════════════════
+
+_STRINGS_EXPLAIN = """\
+Strings are contiguous runs of printable ASCII bytes (0x20–0x7E) of
+at least --min-len characters. They often reveal hard-coded paths,
+error messages, version strings, format specifiers, and crypto keys.
+The section column shows where each string lives in the binary:
+  .rodata  — read-only data (most user-visible strings live here)
+  .dynstr  — dynamic linker symbol and library name strings
+  .text    — sometimes contains inline string literals
+  .data    — writable data; strings here may be modified at runtime\
+"""
+
+
+def render_strings(
+    results: "list",        # list[ExtractedString]
+    console: "Any",
+    title:   str = "Extracted Strings",
+    show_offset: bool = True,
+    explain: bool = False,
+) -> None:
+    """Render extracted strings for ``bytetrace strings``."""
+    nc = console.no_color
+    if _RICH_AVAILABLE:
+        _render_strings_rich(results, console, nc, title, show_offset, explain)
+    else:
+        _render_strings_plain(results, console, nc, title, show_offset, explain)
+
+
+def _render_strings_rich(results, console, nc, title, show_offset, explain):
+    from rich.table import Table
+
+    if explain:
+        console.print()
+        for line in _STRINGS_EXPLAIN.splitlines():
+            console.print(f"  [dim]{line}[/dim]")
+        console.print()
+
+    table = Table(
+        title=title, title_style="bold cyan",
+        border_style="dim", header_style="bold",
+        show_lines=False, padding=(0, 1),
+    )
+    if show_offset:
+        table.add_column("Offset",  style="cyan",  justify="right", min_width=12, no_wrap=True)
+    table.add_column("Section", style="dim",   min_width=10, no_wrap=True)
+    table.add_column("Len",     style="yellow", justify="right", min_width=4, no_wrap=True)
+    table.add_column("String",  min_width=40)
+
+    for s in results:
+        row: list[str] = []
+        if show_offset:
+            row.append(f"0x{s.offset:08x}")
+        row.append(s.section or "—")
+        row.append(str(s.length))
+        # Truncate very long strings for display
+        val = s.value.replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+        if len(val) > 120:
+            val = val[:117] + "..."
+        row.append(val)
+        table.add_row(*row)
+
+    console.print(table)
+    console.print(_c(f"  {len(results)} string(s) found", "dim", nc))
+
+
+def _render_strings_plain(results, console, nc, title, show_offset, explain):
+    if explain:
+        console.print()
+        for line in _STRINGS_EXPLAIN.splitlines():
+            console.print(f"  {line}")
+    SEP = "─" * 74
+    console.print(f"\n  {title}")
+    console.print(f"  {SEP}")
+    for s in results:
+        val = s.value.replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+        if len(val) > 80:
+            val = val[:77] + "..."
+        if show_offset:
+            console.print(f"  0x{s.offset:08x}  {s.section or '':12}  {s.length:4d}  {val}")
+        else:
+            console.print(f"  {s.section or '':12}  {s.length:4d}  {val}")
+    console.print(f"  {SEP}")
+    console.print(f"  {len(results)} string(s) found")
+
+
+# ═════════════════════════════════════════════════════════════════
+# hexdump command
+# ═════════════════════════════════════════════════════════════════
+
+_HEXDUMP_EXPLAIN = """\
+A hexdump displays raw bytes in both hex and ASCII form. Each row shows:
+  Offset   — file position of the first byte on this line
+  Hex cols — each byte as two hex digits (00–FF)
+  ASCII    — printable bytes shown as characters, others as '.'
+Common patterns to look for:
+  ELF magic  7f 45 4c 46 ('.ELF') — always at offset 0x00
+  Null bytes 00 00 00 00 — padding or uninitialized data
+  FF FF FF FF — common sentinel or fill pattern
+  High-entropy scrambled bytes — possible encryption or compression\
+"""
+
+
+def render_hexdump(
+    lines:   "list",        # list[HexLine]
+    console: "Any",
+    title:   str = "Hex Dump",
+    explain: bool = False,
+) -> None:
+    """Render hexdump lines for ``bytetrace hexdump``."""
+    nc = console.no_color
+    if _RICH_AVAILABLE:
+        _render_hexdump_rich(lines, console, nc, title, explain)
+    else:
+        _render_hexdump_plain(lines, console, nc, title, explain)
+
+
+def _hexdump_row(line: "Any", nc: bool) -> tuple:
+    """Return (offset_s, hex_left, hex_right, ascii_s) for one HexLine."""
+    cols  = line.hex_cols
+    width = line.width
+    mid   = width // 2
+    left  = " ".join(cols[:mid])
+    right = " ".join(cols[mid:width])
+    return (
+        _c(f"{line.offset:08x}", "cyan", nc),
+        left,
+        right,
+        line.ascii_col,
+    )
+
+
+def _render_hexdump_rich(lines, console, nc, title, explain):
+    from rich.table import Table
+
+    if explain:
+        console.print()
+        for ln in _HEXDUMP_EXPLAIN.splitlines():
+            console.print(f"  [dim]{ln}[/dim]")
+        console.print()
+
+    if not lines:
+        console.print(_c("  (no bytes to display)", "dim", nc))
+        return
+
+    w = lines[0].width
+    mid = w // 2
+
+    table = Table(
+        title=title, title_style="bold cyan",
+        border_style="dim", header_style="bold",
+        show_lines=False, padding=(0, 1),
+    )
+    table.add_column("Offset",    style="cyan",  justify="right", no_wrap=True, min_width=10)
+    table.add_column(f"Hex (0–{mid-1})",  style="green", min_width=mid*3-1, no_wrap=True)
+    table.add_column(f"Hex ({mid}–{w-1})", style="green", min_width=(w-mid)*3-1, no_wrap=True)
+    table.add_column("ASCII",     style="yellow", min_width=w, no_wrap=True)
+
+    for line in lines:
+        offset_s, hl, hr, ascii_s = _hexdump_row(line, nc)
+        table.add_row(offset_s, hl, hr, f"|{ascii_s}|")
+
+    console.print(table)
+    total = sum(len(ln.data) for ln in lines)
+    console.print(_c(f"  {total} bytes  ({len(lines)} lines)", "dim", nc))
+
+
+def _render_hexdump_plain(lines, console, nc, title, explain):
+    if explain:
+        console.print()
+        for ln in _HEXDUMP_EXPLAIN.splitlines():
+            console.print(f"  {ln}")
+    if not lines:
+        console.print("  (no bytes to display)")
+        return
+
+    SEP = "─" * 74
+    console.print(f"\n  {title}")
+    console.print(f"  {SEP}")
+    for line in lines:
+        cols = line.hex_cols
+        w    = line.width
+        mid  = w // 2
+        left  = " ".join(cols[:mid])
+        right = " ".join(cols[mid:w])
+        console.print(f"  {line.offset:08x}  {left}  {right}  |{line.ascii_col}|")
+    console.print(f"  {SEP}")
+    total = sum(len(ln.data) for ln in lines)
+    console.print(f"  {total} bytes  ({len(lines)} lines)")
