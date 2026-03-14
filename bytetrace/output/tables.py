@@ -491,12 +491,14 @@ def render_disassembly(
     console: Any,
     title: str = "Disassembly",
     binary: "Any | None" = None,
+    explain: bool = False,
 ) -> None:
     """
     Render a list of ``Instruction`` objects for ``bytetrace disasm``.
 
-    Annotates ``call`` and ``jmp`` targets with symbol names when
-    *binary* is provided.
+    When *explain* is True each instruction is followed by a plain-
+    English annotation produced by the explanation engine.  Symbol
+    names are resolved when *binary* is provided.
     """
     nc = console.no_color
 
@@ -507,10 +509,21 @@ def render_disassembly(
             if sym.address and sym.address not in sym_lookup:
                 sym_lookup[sym.address] = sym.name
 
-    if _RICH_AVAILABLE:
-        _render_disasm_rich(instructions, console, nc, title, sym_lookup)
+    # Produce explanations (empty strings when explain=False)
+    explanations: list[str] = []
+    if explain:
+        try:
+            from bytetrace.explain.explainer import explain_instructions
+            explanations = explain_instructions(instructions, sym_lookup)
+        except ImportError:
+            explanations = [""] * len(instructions)
     else:
-        _render_disasm_plain(instructions, console, nc, title, sym_lookup)
+        explanations = [""] * len(instructions)
+
+    if _RICH_AVAILABLE:
+        _render_disasm_rich(instructions, console, nc, title, sym_lookup, explanations)
+    else:
+        _render_disasm_plain(instructions, console, nc, title, sym_lookup, explanations)
 
 
 def _resolve_sym(op_str: str, sym_lookup: dict[int, str]) -> str:
@@ -540,52 +553,57 @@ def _bytes_str(raw: bytes) -> str:
     return raw[:6].hex() + ".."
 
 
+_BRANCH = frozenset({"call","jmp","je","jne","jz","jnz","jl","jle","jg","jge",
+                      "jb","jbe","ja","jae","js","jns","jp","jnp","jo","jno",
+                      "jrcxz","loop","loope","loopne"})
+_STACK  = frozenset({"push","pop","leave","enter","ret"})
+_TERM   = frozenset({"ret","hlt","ud2"})
+
+
+def _mnem_color(mnm: str) -> str:
+    if mnm in _TERM:    return "bold red"
+    if mnm in _BRANCH:  return "bold yellow"
+    if mnm in _STACK:   return "bold magenta"
+    if mnm == "nop":    return "dim"
+    return "bold green"
+
+
 def _render_disasm_rich(
     instructions: list,
     console: Any,
     nc: bool,
     title: str,
     sym_lookup: dict[int, str],
+    explanations: list[str],
 ) -> None:
     from rich.table import Table
+
+    has_explain = any(e for e in explanations)
 
     table = Table(
         title=title, title_style="bold cyan",
         border_style="dim", header_style="bold",
         show_lines=False, padding=(0, 1),
     )
-    table.add_column("Address", style="cyan",  justify="right", min_width=18, no_wrap=True)
-    table.add_column("Bytes",   style="dim",   min_width=14,    no_wrap=True)
-    table.add_column("Mnemonic",style="bold green", min_width=10, no_wrap=True)
-    table.add_column("Operands", min_width=30)
+    table.add_column("Address",  style="cyan",  justify="right", min_width=18, no_wrap=True)
+    table.add_column("Bytes",    style="dim",   min_width=14,    no_wrap=True)
+    table.add_column("Mnemonic", min_width=10,  no_wrap=True)
+    table.add_column("Operands", min_width=28)
+    if has_explain:
+        table.add_column("Explanation", style="dim italic", min_width=36)
 
-    _BRANCH = frozenset({"call","jmp","je","jne","jz","jnz","jl","jle","jg","jge",
-                          "jb","jbe","ja","jae","js","jns","jp","jnp","jo","jno",
-                          "jrcxz","loop","loope","loopne"})
-    _STACK  = frozenset({"push","pop","leave","enter","ret"})
-    _TERM   = frozenset({"ret","hlt","ud2"})
-
-    for insn in instructions:
-        mnm = insn.mnemonic
-        op  = _resolve_sym(insn.op_str, sym_lookup)
-
-        if mnm in _TERM:
-            m_style = "bold red"
-        elif mnm in _BRANCH:
-            m_style = "bold yellow"
-        elif mnm in _STACK:
-            m_style = "bold magenta"
-        elif mnm == "nop":
-            m_style = "dim"
-        else:
-            m_style = "bold green"
-
-        table.add_row(
+    for insn, expl in zip(instructions, explanations):
+        op      = _resolve_sym(insn.op_str, sym_lookup)
+        m_style = _mnem_color(insn.mnemonic)
+        row = [
             f"0x{insn.address:016x}",
             _c(_bytes_str(insn.raw), "dim", nc),
-            _c(mnm, m_style, nc),
+            _c(insn.mnemonic, m_style, nc),
             op,
-        )
+        ]
+        if has_explain:
+            row.append(expl)
+        table.add_row(*row)
 
     console.print(table)
     console.print(_c(f"  {len(instructions)} instruction(s)", "dim", nc))
@@ -597,21 +615,28 @@ def _render_disasm_plain(
     nc: bool,
     title: str,
     sym_lookup: dict[int, str],
+    explanations: list[str],
 ) -> None:
+    has_explain = any(e for e in explanations)
     console.print(f"\n  {title}")
-    SEP = "─" * 74
+    SEP = "─" * (90 if has_explain else 74)
     console.print(f"  {SEP}")
     hdr = f"  {'Address':<20} {'Bytes':<14} {'Mnemonic':<12} Operands"
+    if has_explain:
+        hdr += f"{'':4}Explanation"
     console.print(hdr)
     console.print(f"  {SEP}")
-    for insn in instructions:
-        op = _resolve_sym(insn.op_str, sym_lookup)
-        console.print(
+    for insn, expl in zip(instructions, explanations):
+        op   = _resolve_sym(insn.op_str, sym_lookup)
+        line = (
             f"  0x{insn.address:016x}  "
             f"{_bytes_str(insn.raw):<14} "
             f"{insn.mnemonic:<12} "
-            f"{op}"
+            f"{op:<30}"
         )
+        if has_explain and expl:
+            line += f"  ; {expl}"
+        console.print(line)
     console.print(f"  {SEP}")
     console.print(f"  {len(instructions)} instruction(s)")
 
