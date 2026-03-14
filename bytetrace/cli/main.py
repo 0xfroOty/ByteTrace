@@ -3,11 +3,27 @@ from __future__ import annotations
 import click
 from bytetrace import __version__
 
-CONTEXT_SETTINGS: dict = {"help_option_names": ["-h", "--help"], "max_content_width": 100}
+CONTEXT_SETTINGS: dict = {
+    "help_option_names": [],
+    "max_content_width": 100,
+}
+
+BANNER = r"""
+ ██████╗ ██╗   ██╗████████╗███████╗████████╗██████╗  █████╗  ██████╗███████╗
+ ██╔══██╗╚██╗ ██╔╝╚══██╔══╝██╔════╝╚══██╔══╝██╔══██╗██╔══██╗██╔════╝██╔════╝
+ ██████╔╝ ╚████╔╝    ██║   █████╗     ██║   ██████╔╝███████║██║     █████╗
+ ██╔══██╗  ╚██╔╝     ██║   ██╔══╝     ██║   ██╔══██╗██╔══██║██║     ██╔══╝
+ ██████╔╝   ██║      ██║   ███████╗   ██║   ██║  ██║██║  ██║╚██████╗███████╗
+ ╚═════╝    ╚═╝      ╚═╝   ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚══════╝
+
+ ByteTrace — Binary analysis for humans
+"""
+
 
 def _apply_no_color(ctx: click.Context, _param, value: bool) -> None:
     ctx.ensure_object(dict)
     ctx.obj["no_color"] = value
+
 
 @click.group(context_settings=CONTEXT_SETTINGS, invoke_without_command=True)
 @click.version_option(version=__version__, prog_name="bytetrace", message="%(prog)s %(version)s")
@@ -15,8 +31,10 @@ def _apply_no_color(ctx: click.Context, _param, value: bool) -> None:
               is_eager=True, expose_value=False,
               help="Disable colour output (also respects $NO_COLOR).",
               callback=_apply_no_color)
+@click.option("-h", "--help", "show_help", is_flag=True, default=False,
+              help="Show this message and exit.")
 @click.pass_context
-def cli(ctx: click.Context) -> None:
+def cli(ctx: click.Context, show_help: bool) -> None:
     """
     \b
     ByteTrace — binary analysis for humans.
@@ -34,18 +52,10 @@ def cli(ctx: click.Context) -> None:
     \b
     Universal flags: --explain  --json  --no-color  --quiet/-q
     """
-    if ctx.invoked_subcommand is not None:
-        return
-    no_color: bool = (ctx.obj or {}).get("no_color", False)
-    try:
-        from rich.console import Console
-        Console(no_color=no_color).print(
-            f"\n  [bold cyan]ByteTrace[/bold cyan] [dim]v{__version__}[/dim]\n"
-            "  [dim]A modern, educational binary analysis tool.[/dim]\n"
-        )
-    except ImportError:
-        click.echo(f"\n  ByteTrace v{__version__}\n")
-    click.echo(ctx.get_help())
+    if show_help or ctx.invoked_subcommand is None:
+        click.echo(BANNER)
+        click.echo(ctx.get_help())
+
 
 # ── Sub-command registration ──────────────────────────────────────
 from bytetrace.cli.commands.version  import version   # noqa: E402
@@ -66,8 +76,10 @@ cli.add_command(cfg)
 cli.add_command(strings)
 cli.add_command(hexdump)
 
+
 def main() -> None:
     cli(obj={})
+
 
 if __name__ == "__main__":
     main()
