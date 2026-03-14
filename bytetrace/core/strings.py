@@ -188,7 +188,7 @@ def _scan_whole_file(binary: Binary, min_len: int) -> Iterator[ExtractedString]:
     for sec in binary.sections:
         if sec.size > 0 and sec.offset > 0:
             spans.append((sec.offset, sec.offset + sec.size, sec))
-    spans.sort()
+    spans.sort(key=lambda s: s[0])
 
     def _section_at(offset: int) -> tuple[str, int]:
         """Return (section_name, vaddr_base) for *offset*, or ('', 0)."""
